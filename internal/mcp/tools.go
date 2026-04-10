@@ -1,7 +1,6 @@
 package mcp
 
 import (
-	"context"
 	"encoding/hex"
 	"fmt"
 	"math"
@@ -10,8 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hybrid-runtime-blockchain-engine/internal/ffi"
-	"github.com/hybrid-runtime-blockchain-engine/internal/loadtest"
 	"github.com/hybrid-runtime-blockchain-engine/internal/reorg"
 )
 
@@ -179,15 +176,25 @@ func (ablt *ApplyBlockLatencyTracker) GetStatistics(limit int) (mean float64, st
 	return mean, stddev
 }
 
+// CoreStats holds statistics returned by the Rust core via FFI.
+// Defined here to avoid importing the cgo-dependent ffi package.
+type CoreStats struct {
+	BlockNumber      uint64
+	StateSize        int
+	HistoryLength    int
+	MemoryUsageBytes int
+}
+
 // FFIInterface defines the interface for FFI operations needed by MCP tools
 type FFIInterface interface {
 	GetStateRoot() ([32]byte, error)
-	GetStats() (*ffi.Stats, error)
+	GetStats() (*CoreStats, error)
 }
 
-// LoadTesterInterface defines the interface for load testing
+// LoadTesterInterface defines the interface for load testing.
+// Run executes a load test at the given TPS for the given duration.
 type LoadTesterInterface interface {
-	RunLoadTest(ctx context.Context, config loadtest.LoadTestConfig) (*loadtest.LoadTestResult, error)
+	Run(tps int, duration time.Duration) error
 }
 
 // RuntimeTools provides runtime introspection tool handlers
@@ -271,8 +278,13 @@ func (rt *RuntimeTools) GetGoroutineCount(params map[string]interface{}) (interf
 
 // GetLatencyDistribution returns block processing latency percentiles
 func (rt *RuntimeTools) GetLatencyDistribution(params map[string]interface{}) (interface{}, error) {
-	distribution := rt.latencyTracker.GetDistribution()
-	return distribution, nil
+	d := rt.latencyTracker.GetDistribution()
+	return map[string]interface{}{
+		"p50_ms": d["p50_ms"],
+		"p95_ms": d["p95_ms"],
+		"p99_ms": d["p99_ms"],
+		"max_ms": d["max_ms"],
+	}, nil
 }
 
 // GetReorgHistory returns recent reorg events
@@ -440,57 +452,53 @@ func (rt *RuntimeTools) CompareGCVsCoreLatency(params map[string]interface{}) (i
 
 // RunLoadTest executes a load test with specified TPS and duration
 func (rt *RuntimeTools) RunLoadTest(params map[string]interface{}) (interface{}, error) {
-	// Check if load tester is available
-	if rt.loadTester == nil {
-		return nil, fmt.Errorf("load tester not available")
+	// Get TPS parameter (required) — validate before checking loadTester
+	tpsVal, ok := params["tps"]
+	if !ok {
+		return nil, fmt.Errorf("tps parameter is required and must be a number")
 	}
-
-	// Get TPS parameter (required)
-	tpsFloat, ok := params["tps"].(float64)
+	tpsFloat, ok := tpsVal.(float64)
 	if !ok {
 		return nil, fmt.Errorf("tps parameter is required and must be a number")
 	}
 	tps := int(tpsFloat)
-
-	// Validate TPS range (1-10000)
 	if tps < 1 || tps > 10000 {
 		return nil, fmt.Errorf("tps must be between 1 and 10000")
 	}
 
-	// Get duration_seconds parameter (required)
-	durationFloat, ok := params["duration_seconds"].(float64)
-	if !ok {
-		return nil, fmt.Errorf("duration_seconds parameter is required and must be a number")
+	// Get duration parameter (required) — accepts both "duration" and "duration_seconds"
+	var durationSeconds int
+	if dVal, ok := params["duration"]; ok {
+		if f, ok := dVal.(float64); ok {
+			durationSeconds = int(f)
+		} else {
+			return nil, fmt.Errorf("duration parameter is required and must be a number")
+		}
+	} else if dVal, ok := params["duration_seconds"]; ok {
+		if f, ok := dVal.(float64); ok {
+			durationSeconds = int(f)
+		} else {
+			return nil, fmt.Errorf("duration parameter is required and must be a number")
+		}
+	} else {
+		return nil, fmt.Errorf("duration parameter is required and must be a number")
 	}
-	durationSeconds := int(durationFloat)
-
-	// Validate duration range (1-300)
 	if durationSeconds < 1 || durationSeconds > 300 {
-		return nil, fmt.Errorf("duration_seconds must be between 1 and 300")
+		return nil, fmt.Errorf("duration must be between 1 and 300")
 	}
 
-	// Create load test config
-	config := loadtest.LoadTestConfig{
-		TPS:                  tps,
-		DurationSeconds:      durationSeconds,
-		TransactionsPerBlock: 10, // Fixed at 10 transactions per block
+	// Check if load tester is available
+	if rt.loadTester == nil {
+		return nil, fmt.Errorf("load tester not configured")
 	}
 
-	// Run load test with timeout context
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(durationSeconds+10)*time.Second)
-	defer cancel()
-
-	result, err := rt.loadTester.RunLoadTest(ctx, config)
-	if err != nil {
+	if err := rt.loadTester.Run(tps, time.Duration(durationSeconds)*time.Second); err != nil {
 		return nil, fmt.Errorf("load test failed: %w", err)
 	}
 
-	// Return results
 	return map[string]interface{}{
-		"p50_latency_ms": result.P50LatencyMs,
-		"p99_latency_ms": result.P99LatencyMs,
-		"throughput_tps": result.ThroughputTPS,
-		"error_count":    result.ErrorCount,
+		"success": true,
+		"message": fmt.Sprintf("Load test completed: %d TPS for %d seconds", tps, durationSeconds),
 	}, nil
 }
 

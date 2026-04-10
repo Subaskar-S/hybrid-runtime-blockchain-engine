@@ -57,36 +57,35 @@ func main() {
 	shutdownMgr := shutdown.NewManager(logger)
 
 	// Initialize Block Streamer
-	blockStreamer := streamer.NewBlockStreamer(logger.Named("streamer"), cfg.ETHRPCURL)
+	blockStreamer := streamer.NewEthBlockStreamer(logger.Named("streamer"))
 	shutdownMgr.RegisterShutdownFunc(func(ctx context.Context) error {
 		logger.Info("Stopping Block Streamer")
-		blockStreamer.Stop()
-		return nil
-	})
-
-	// Initialize Worker Pool
-	workerPool := worker.NewWorkerPool(logger.Named("worker"), cfg.WorkerCount, ffiLayer)
-	shutdownMgr.RegisterShutdownFunc(func(ctx context.Context) error {
-		logger.Info("Stopping Worker Pool", zap.Duration("timeout", 30*time.Second))
-		return workerPool.Stop(ctx)
+		return blockStreamer.Stop()
 	})
 
 	// Initialize Reorg Engine
 	reorgEngine := reorg.NewReorgEngine(logger.Named("reorg"), ffiLayer)
 
+	// Initialize Worker Pool — the reorg engine acts as the block processor
+	workerPool := worker.NewPool(logger.Named("worker"), reorgEngine)
+	shutdownMgr.RegisterShutdownFunc(func(ctx context.Context) error {
+		logger.Info("Stopping Worker Pool", zap.Duration("timeout", 30*time.Second))
+		return workerPool.Stop(ctx)
+	})
+
 	// Initialize Metrics Collector
-	metricsCollector := metrics.NewCollector(logger.Named("metrics"), cfg.MetricsPort)
-	metricsCollector.RegisterAdapters(
-		metrics.NewWorkerPoolAdapter(workerPool),
-		metrics.NewFFIAdapter(ffiLayer),
-		metrics.NewReorgEngineAdapter(reorgEngine),
-	)
-	
-	if err := metricsCollector.Start(); err != nil {
+	metricsCollector := metrics.NewCollector(logger.Named("metrics"))
+	metricsCollector.RegisterWorkerPool(metrics.NewWorkerPoolAdapter(workerPool))
+	metricsCollector.RegisterRustCore(metrics.NewRustCoreAdapter(ffiLayer))
+	metricsCollector.RegisterReorgEngine(metrics.NewReorgEngineAdapter(reorgEngine))
+	metricsCollector.RegisterBlockStreamer(blockStreamer)
+	metricsCollector.RegisterWorkerPoolHealth(workerPool)
+
+	if err := metricsCollector.Start(context.Background(), cfg.MetricsPort); err != nil {
 		logger.Fatal("Failed to start Metrics Collector", zap.Error(err))
 	}
 	logger.Info("Metrics Collector started", zap.Int("port", cfg.MetricsPort))
-	
+
 	shutdownMgr.RegisterShutdownFunc(func(ctx context.Context) error {
 		logger.Info("Stopping Metrics Collector")
 		return metricsCollector.Stop(ctx)
@@ -94,61 +93,51 @@ func main() {
 
 	// Initialize MCP Server
 	mcpServer := mcp.NewServer(logger.Named("mcp"), cfg.MCPPort)
-	runtimeTools := mcp.RegisterRuntimeTools(mcpServer, reorgEngine, ffiLayer)
-	
+	runtimeTools := mcp.RegisterRuntimeTools(mcpServer, reorgEngine, metrics.NewMCPFFIAdapter(ffiLayer))
+
 	if err := mcpServer.Start(); err != nil {
 		logger.Fatal("Failed to start MCP Server", zap.Error(err))
 	}
 	logger.Info("MCP Server started", zap.Int("port", cfg.MCPPort))
-	
+
 	shutdownMgr.RegisterShutdownFunc(func(ctx context.Context) error {
 		logger.Info("Stopping MCP Server")
-		return mcpServer.Stop(ctx)
+		return mcpServer.Stop()
 	})
 
 	// Initialize Load Tester (if enabled)
-	var loadTester *loadtest.LoadTester
 	if cfg.LoadTestEnabled {
-		loadTester = loadtest.NewLoadTester(logger.Named("loadtest"), ffiLayer, workerPool, reorgEngine)
-		runtimeTools.SetLoadTester(loadTester)
+		lt := loadtest.NewLoadTester(logger.Named("loadtest"), workerPool, 42)
+		runtimeTools.SetLoadTester(lt)
 		logger.Info("Load Tester enabled")
 	}
 
 	// Start Worker Pool
-	workerPool.Start()
+	if err := workerPool.Start(context.Background(), cfg.WorkerCount); err != nil {
+		logger.Fatal("Failed to start Worker Pool", zap.Error(err))
+	}
 	logger.Info("Worker Pool started", zap.Int("worker_count", cfg.WorkerCount))
 
-	// Start Block Streamer
-	if err := blockStreamer.Start(); err != nil {
-		logger.Fatal("Failed to start Block Streamer", zap.Error(err))
+	// Start Block Streamer — in load test mode a real RPC connection is optional
+	if err := blockStreamer.Start(context.Background(), cfg.ETHRPCURL); err != nil {
+		if cfg.LoadTestEnabled {
+			logger.Warn("Block Streamer failed to connect (load test mode — continuing without live blocks)",
+				zap.Error(err))
+		} else {
+			logger.Fatal("Failed to start Block Streamer", zap.Error(err))
+		}
+	} else {
+		logger.Info("Block Streamer started")
 	}
-	logger.Info("Block Streamer started")
 
-	// Wire components together - process blocks from streamer
+	// Wire: forward blocks from streamer → worker pool, recording latency
 	go func() {
-		blockChan := blockStreamer.Blocks()
-		for block := range blockChan {
-			// Record latency
+		for block := range blockStreamer.Blocks() {
 			start := time.Now()
-			
-			// Check for reorg
-			if reorgEngine.DetectReorg(block) {
-				logger.Warn("Reorg detected",
-					zap.Uint64("block_number", block.Number),
-					zap.String("parent_hash", fmt.Sprintf("%x", block.ParentHash)),
-				)
-				
-				// Handle reorg
-				if err := reorgEngine.HandleReorg(block); err != nil {
-					logger.Error("Failed to handle reorg", zap.Error(err))
-					continue
-				}
+			if err := workerPool.Submit(block); err != nil {
+				logger.Error("Failed to submit block", zap.Error(err))
+				continue
 			}
-			
-			// Submit block to worker pool
-			workerPool.Submit(block)
-			
-			// Record latency
 			latencyMs := float64(time.Since(start).Milliseconds())
 			runtimeTools.GetLatencyTracker().Record(latencyMs)
 		}
@@ -161,15 +150,13 @@ func main() {
 	logger.Info("Shutdown signal received", zap.String("signal", sig.String()))
 
 	// Query and log final state
-	stateRoot, err := ffiLayer.GetStateRoot()
-	if err != nil {
+	if stateRoot, err := ffiLayer.GetStateRoot(); err != nil {
 		logger.Error("Failed to get final state root", zap.Error(err))
 	} else {
 		logger.Info("Final state root", zap.String("state_root", fmt.Sprintf("%x", stateRoot)))
 	}
 
-	stats, err := ffiLayer.GetStats()
-	if err != nil {
+	if stats, err := ffiLayer.GetStats(); err != nil {
 		logger.Error("Failed to get final stats", zap.Error(err))
 	} else {
 		logger.Info("Final stats",

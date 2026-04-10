@@ -13,10 +13,18 @@ const (
 	MaxReorgDepth = 10
 )
 
+// FFIClient is the subset of ffi.FFI used by the reorg engine.
+// Using an interface keeps this package free of direct cgo dependencies
+// and makes it easy to mock in tests.
+type FFIClient interface {
+	ApplyBlock(block *ffi.Block) (ffi.Hash, error)
+	RollbackTo(blockNumber uint64) error
+}
+
 // ReorgEngine handles blockchain reorganization detection and recovery
 type ReorgEngine struct {
 	logger      *zap.Logger
-	ffi         *ffi.FFI
+	ffi         FFIClient
 	ringBuffer  *RingBuffer
 	reorgCount  int64
 	reorgEvents []ReorgEvent
@@ -92,10 +100,10 @@ func (rb *RingBuffer) Truncate(keepSize int) {
 }
 
 // NewReorgEngine creates a new reorg engine
-func NewReorgEngine(logger *zap.Logger, ffi *ffi.FFI) *ReorgEngine {
+func NewReorgEngine(logger *zap.Logger, ffiClient FFIClient) *ReorgEngine {
 	return &ReorgEngine{
 		logger:      logger,
-		ffi:         ffi,
+		ffi:         ffiClient,
 		ringBuffer:  NewRingBuffer(),
 		reorgEvents: make([]ReorgEvent, 0, 100),
 	}
@@ -131,7 +139,9 @@ func (re *ReorgEngine) ProcessBlock(block *ffi.Block) error {
 	return nil
 }
 
-// DetectReorg detects if a block represents a reorganization
+// DetectReorg detects if a block represents a reorganization.
+// A reorg is detected when the new block's ParentHash does not match
+// the hash of the most recent block in the ring buffer.
 func (re *ReorgEngine) DetectReorg(newBlock *ffi.Block) (bool, uint64, error) {
 	// If buffer is empty, no reorg possible
 	if re.ringBuffer.Size() == 0 {
@@ -143,15 +153,15 @@ func (re *ReorgEngine) DetectReorg(newBlock *ffi.Block) (bool, uint64, error) {
 		return false, 0, nil
 	}
 
-	// Check if parent hash matches previous block
-	// In a real implementation, we'd compare newBlock.ParentHash with prevBlock.Hash()
-	// For now, we check if block numbers are sequential
-	if newBlock.Number == prevBlock.Number+1 {
-		// Sequential - no reorg
+	// Normal sequential block: parent hash must match previous block's hash
+	prevHash := prevBlock.Hash()
+	if newBlock.ParentHash == prevHash {
 		return false, 0, nil
 	}
 
-	// Potential reorg detected - find fork point
+	// Parent hash mismatch — potential reorg. Find fork point by scanning
+	// the ring buffer backwards for the block whose hash matches the new
+	// block's parent hash.
 	forkPoint, err := re.findForkPoint(newBlock)
 	if err != nil {
 		return false, 0, err
@@ -159,7 +169,6 @@ func (re *ReorgEngine) DetectReorg(newBlock *ffi.Block) (bool, uint64, error) {
 
 	// Calculate reorg depth
 	depth := int(prevBlock.Number - forkPoint)
-	
 	if depth > MaxReorgDepth {
 		return false, 0, fmt.Errorf("reorg depth %d exceeds maximum %d", depth, MaxReorgDepth)
 	}
@@ -167,45 +176,43 @@ func (re *ReorgEngine) DetectReorg(newBlock *ffi.Block) (bool, uint64, error) {
 	return true, forkPoint, nil
 }
 
-// findForkPoint finds the block number where the chains diverge
+// findForkPoint traverses the ring buffer backwards to find the block whose
+// hash matches newBlock.ParentHash, returning that block's number.
 func (re *ReorgEngine) findForkPoint(newBlock *ffi.Block) (uint64, error) {
-	// Traverse ring buffer backwards to find fork point
-	// In a real implementation, we'd compare hashes
-	// For now, we use a simplified approach
-	
 	for i := re.ringBuffer.Size() - 1; i >= 0; i-- {
 		block := re.ringBuffer.Get(i)
 		if block == nil {
 			continue
 		}
-
-		// Check if this could be the fork point
-		// In reality, we'd check: newBlock.ParentHash == block.Hash()
-		if newBlock.Number > block.Number {
+		if block.Hash() == newBlock.ParentHash {
 			return block.Number, nil
 		}
 	}
-
-	return 0, fmt.Errorf("fork point not found in ring buffer")
+	return 0, fmt.Errorf("fork point not found in ring buffer (reorg depth may exceed buffer size)")
 }
 
 // HandleReorg handles a detected reorganization
 func (re *ReorgEngine) HandleReorg(forkPoint uint64, newBlock *ffi.Block) error {
 	start := time.Now()
 
+	// Capture the previous tip before we modify the ring buffer
+	prevTip := re.ringBuffer.Latest()
+	depth := 0
+	if prevTip != nil && prevTip.Number > forkPoint {
+		depth = int(prevTip.Number - forkPoint)
+	}
+
 	// Rollback to fork point
 	if err := re.Rollback(forkPoint); err != nil {
 		return fmt.Errorf("rollback failed: %w", err)
 	}
 
-	// Replay new canonical chain
-	// In a real implementation, we'd fetch and replay blocks from fork point + 1
-	// For now, we just apply the new block
+	// Apply the new block
 	if _, err := re.ffi.ApplyBlock(newBlock); err != nil {
 		return fmt.Errorf("replay failed: %w", err)
 	}
 
-	// Update ring buffer
+	// Update ring buffer: keep only blocks up to and including the fork point
 	re.ringBuffer.Truncate(int(forkPoint))
 	re.ringBuffer.Add(newBlock)
 
@@ -214,7 +221,7 @@ func (re *ReorgEngine) HandleReorg(forkPoint uint64, newBlock *ffi.Block) error 
 	event := ReorgEvent{
 		Timestamp:          time.Now(),
 		ForkPoint:          forkPoint,
-		Depth:              int(newBlock.Number - forkPoint),
+		Depth:              depth,
 		RollbackDurationMs: float64(duration.Milliseconds()),
 	}
 	re.reorgEvents = append(re.reorgEvents, event)

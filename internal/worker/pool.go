@@ -84,20 +84,20 @@ func (p *Pool) Submit(block *ffi.Block) error {
 // Stop gracefully stops the worker pool
 func (p *Pool) Stop(ctx context.Context) error {
 	p.logger.Info("stopping worker pool")
-	
-	// Signal stop
+
+	// Signal stop — workers will drain remaining items then exit.
+	// We close stopCh first so Submit() returns an error immediately,
+	// then close blocks so workers exit their range loop cleanly.
 	close(p.stopCh)
-	
-	// Close blocks channel to signal workers
 	close(p.blocks)
-	
+
 	// Wait for workers to complete with timeout
 	done := make(chan struct{})
 	go func() {
 		p.wg.Wait()
 		close(done)
 	}()
-	
+
 	select {
 	case <-done:
 		p.logger.Info("worker pool stopped gracefully",
@@ -118,34 +118,30 @@ func (p *Pool) ActiveWorkers() int {
 // worker is the main worker goroutine
 func (p *Pool) worker(ctx context.Context, id int) {
 	defer p.wg.Done()
-	defer p.recoverPanic(id)
 
 	p.logger.Debug("worker started", zap.Int("worker_id", id))
 	atomic.AddInt32(&p.activeWorkers, 1)
 	defer atomic.AddInt32(&p.activeWorkers, -1)
 
-	for {
+	// Range over the channel — exits cleanly when channel is closed by Stop().
+	// We also respect ctx cancellation inside processBlockSafe.
+	for block := range p.blocks {
 		select {
 		case <-ctx.Done():
 			p.logger.Debug("worker context cancelled", zap.Int("worker_id", id))
 			return
-		case <-p.stopCh:
-			p.logger.Debug("worker received stop signal", zap.Int("worker_id", id))
-			return
-		case block, ok := <-p.blocks:
-			if !ok {
-				p.logger.Debug("worker channel closed", zap.Int("worker_id", id))
-				return
-			}
-
-			// Process block with panic recovery
-			p.processBlockSafe(id, block)
+		default:
 		}
+		p.processBlockSafe(ctx, id, block)
 	}
+
+	p.logger.Debug("worker channel closed", zap.Int("worker_id", id))
 }
 
-// processBlockSafe processes a block with panic recovery
-func (p *Pool) processBlockSafe(workerID int, block *ffi.Block) {
+// processBlockSafe processes a block with panic recovery.
+// On panic the worker increments the panic counter and returns; the caller
+// (worker goroutine) will exit and the pool will restart it.
+func (p *Pool) processBlockSafe(ctx context.Context, workerID int, block *ffi.Block) {
 	defer func() {
 		if r := recover(); r != nil {
 			p.handlePanic(workerID, r)
@@ -153,7 +149,7 @@ func (p *Pool) processBlockSafe(workerID int, block *ffi.Block) {
 	}()
 
 	start := time.Now()
-	
+
 	if err := p.processor.ProcessBlock(block); err != nil {
 		p.logger.Error("block processing failed",
 			zap.Int("worker_id", workerID),
@@ -163,23 +159,11 @@ func (p *Pool) processBlockSafe(workerID int, block *ffi.Block) {
 	}
 
 	atomic.AddInt64(&p.processedBlocks, 1)
-	
+
 	p.logger.Debug("block processed successfully",
 		zap.Int("worker_id", workerID),
 		zap.Uint64("block_number", block.Number),
 		zap.Duration("duration", time.Since(start)))
-}
-
-// recoverPanic recovers from panics and restarts the worker
-func (p *Pool) recoverPanic(workerID int) {
-	if r := recover(); r != nil {
-		p.handlePanic(workerID, r)
-		
-		// Restart worker
-		p.logger.Info("restarting worker after panic", zap.Int("worker_id", workerID))
-		p.wg.Add(1)
-		go p.worker(context.Background(), workerID)
-	}
 }
 
 // handlePanic handles a panic from a worker

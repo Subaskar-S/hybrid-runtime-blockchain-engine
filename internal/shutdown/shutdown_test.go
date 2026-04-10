@@ -3,7 +3,6 @@ package shutdown
 import (
 	"context"
 	"errors"
-	"os"
 	"syscall"
 	"testing"
 	"time"

@@ -1,43 +1,60 @@
-.PHONY: build run test bench clean
+.PHONY: build run test bench clean coverage docker
 
-# Build targets
+# ── Build ─────────────────────────────────────────────────────────────────────
 build: build-rust build-go
 
 build-rust:
 	cd rust-core && cargo build --release
 
 build-go:
-	CGO_ENABLED=1 go build -o bin/hybrid-runtime-blockchain-engine ./cmd/server
+	CGO_ENABLED=1 \
+	CGO_LDFLAGS="-L$(PWD)/rust-core/target/release" \
+	go build -o bin/hybrid-runtime-blockchain-engine ./cmd/server
 
-# Run target
+# ── Run ───────────────────────────────────────────────────────────────────────
 run: build
+	ETH_RPC_URL=$${ETH_RPC_URL:-ws://localhost:8545} \
+	WORKER_COUNT=$${WORKER_COUNT:-4} \
+	METRICS_PORT=$${METRICS_PORT:-9090} \
+	MCP_PORT=$${MCP_PORT:-8080} \
+	LOAD_TEST_ENABLED=$${LOAD_TEST_ENABLED:-false} \
 	./bin/hybrid-runtime-blockchain-engine
 
-# Test targets
+# ── Test ──────────────────────────────────────────────────────────────────────
 test: test-rust test-go
 
 test-rust:
 	cd rust-core && cargo test
 
 test-go:
+	CGO_ENABLED=1 \
+	CGO_LDFLAGS="-L$(PWD)/rust-core/target/release" \
 	go test ./... -v -race -coverprofile=coverage.out
 
-# Benchmark targets
+# ── Benchmarks ────────────────────────────────────────────────────────────────
 bench: bench-rust bench-go
 
 bench-rust:
 	cd rust-core && cargo bench
 
 bench-go:
-	go test ./... -bench=. -benchmem
+	CGO_ENABLED=1 \
+	CGO_LDFLAGS="-L$(PWD)/rust-core/target/release" \
+	go test ./... -bench=. -benchmem -run=^$
 
-# Coverage
+# ── Coverage ──────────────────────────────────────────────────────────────────
 coverage:
-	go tool cover -html=coverage.out
+	go tool cover -html=coverage.out -o coverage.html
+	@echo "Coverage report written to coverage.html"
 
-# Clean target
+# ── Docker ────────────────────────────────────────────────────────────────────
+docker:
+	docker build -t hybrid-runtime-blockchain-engine:latest -f docker/Dockerfile .
+
+# ── Clean ─────────────────────────────────────────────────────────────────────
 clean:
 	rm -rf rust-core/target
 	rm -f bin/hybrid-runtime-blockchain-engine
-	rm -f coverage.out
+	rm -f coverage.out coverage.html
 	rm -f *.test
+	rm -f benchmark_report_*.json

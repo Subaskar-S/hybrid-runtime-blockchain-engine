@@ -114,18 +114,23 @@ func (v *InputValidator) validateLoadTest(params map[string]interface{}) error {
 		return fmt.Errorf("tps must be between 1 and 10000")
 	}
 
-	duration, ok := params["duration_seconds"]
-	if !ok {
-		return fmt.Errorf("missing required parameter: duration_seconds")
+	// Accept either "duration" or "duration_seconds"
+	var durationVal interface{}
+	if v, ok := params["duration"]; ok {
+		durationVal = v
+	} else if v, ok := params["duration_seconds"]; ok {
+		durationVal = v
+	} else {
+		return fmt.Errorf("missing required parameter: duration (or duration_seconds)")
 	}
 
-	durationFloat, ok := duration.(float64)
+	durationFloat, ok := durationVal.(float64)
 	if !ok {
-		return fmt.Errorf("duration_seconds must be a number")
+		return fmt.Errorf("duration must be a number")
 	}
 
 	if durationFloat < 1 || durationFloat > 300 {
-		return fmt.Errorf("duration_seconds must be between 1 and 300")
+		return fmt.Errorf("duration must be between 1 and 300")
 	}
 
 	return nil

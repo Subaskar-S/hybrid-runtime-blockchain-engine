@@ -1,7 +1,9 @@
 package ffi
 
 /*
-#cgo LDFLAGS: -L../../rust-core/target/release -lrust_core -lws2_32 -luserenv -lbcrypt -lntdll -lgcc_eh -lstdc++
+#cgo darwin  LDFLAGS: -L../../rust-core/target/release -lrust_core -framework CoreFoundation -framework Security
+#cgo linux   LDFLAGS: -L../../rust-core/target/release -lrust_core -ldl -lpthread -lm
+#cgo windows LDFLAGS: -L../../rust-core/target/release -lrust_core -lws2_32 -luserenv -lbcrypt -lntdll -lgcc_eh -lstdc++
 #include <stdlib.h>
 
 extern int init_engine();

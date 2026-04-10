@@ -1,9 +1,8 @@
-// +build !test
-
 package metrics
 
 import (
 	"github.com/hybrid-runtime-blockchain-engine/internal/ffi"
+	"github.com/hybrid-runtime-blockchain-engine/internal/mcp"
 	"github.com/hybrid-runtime-blockchain-engine/internal/reorg"
 	"github.com/hybrid-runtime-blockchain-engine/internal/worker"
 )
@@ -91,11 +90,32 @@ func (a *RustCoreAdapter) GetStateRoot() ([32]byte, error) {
 	return a.ffi.GetStateRoot()
 }
 
-// ReorgEventAdapter converts reorg.ReorgEvent to metrics.ReorgEvent
-func ReorgEventAdapter(e reorg.ReorgEvent) ReorgEvent {
-	return ReorgEvent{
-		ForkPoint:          e.ForkPoint,
-		Depth:              e.Depth,
-		RollbackDurationMs: e.RollbackDurationMs,
+// MCPFFIAdapter wraps ffi.FFI to satisfy mcp.FFIInterface without exposing
+// the cgo-dependent ffi.Stats type to the mcp package.
+type MCPFFIAdapter struct {
+	ffi *ffi.FFI
+}
+
+// NewMCPFFIAdapter creates a new adapter.
+func NewMCPFFIAdapter(f *ffi.FFI) *MCPFFIAdapter {
+	return &MCPFFIAdapter{ffi: f}
+}
+
+// GetStateRoot delegates to ffi.FFI.
+func (a *MCPFFIAdapter) GetStateRoot() ([32]byte, error) {
+	return a.ffi.GetStateRoot()
+}
+
+// GetStats converts ffi.Stats to mcp.CoreStats.
+func (a *MCPFFIAdapter) GetStats() (*mcp.CoreStats, error) {
+	s, err := a.ffi.GetStats()
+	if err != nil {
+		return nil, err
 	}
+	return &mcp.CoreStats{
+		BlockNumber:      s.BlockNumber,
+		StateSize:        s.StateSize,
+		HistoryLength:    s.HistoryLength,
+		MemoryUsageBytes: s.MemoryUsageBytes,
+	}, nil
 }

@@ -132,7 +132,13 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	if !s.rateLimiter.Allow(req.Method) {
 		s.logger.Warn("rate limit exceeded", zap.String("method", req.Method))
 		w.WriteHeader(http.StatusTooManyRequests)
-		s.writeError(w, req.ID, -32000, "Rate limit exceeded")
+		resp := JSONRPCResponse{
+			JSONRPC: "2.0",
+			Error:   &RPCError{Code: -32000, Message: "Rate limit exceeded"},
+			ID:      req.ID,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
 		return
 	}
 
@@ -142,7 +148,13 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 			zap.String("method", req.Method),
 			zap.Error(err))
 		w.WriteHeader(http.StatusBadRequest)
-		s.writeError(w, req.ID, InvalidParams, err.Error())
+		resp := JSONRPCResponse{
+			JSONRPC: "2.0",
+			Error:   &RPCError{Code: InvalidParams, Message: err.Error()},
+			ID:      req.ID,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
 		return
 	}
 
@@ -186,7 +198,9 @@ func (s *Server) writeSuccess(w http.ResponseWriter, id interface{}, result inte
 	}
 }
 
-// writeError writes an error JSON-RPC response
+// writeError writes an error JSON-RPC response with HTTP 200 (JSON-RPC spec).
+// Callers that need a non-200 HTTP status (429, 400) write the status and
+// body themselves before returning.
 func (s *Server) writeError(w http.ResponseWriter, id interface{}, code int, message string) {
 	resp := JSONRPCResponse{
 		JSONRPC: "2.0",
@@ -198,10 +212,8 @@ func (s *Server) writeError(w http.ResponseWriter, id interface{}, code int, mes
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	if w.Header().Get("Status") == "" {
-		w.WriteHeader(http.StatusOK) // JSON-RPC errors still return 200 unless already set
-	}
-	
+	w.WriteHeader(http.StatusOK)
+
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		s.logger.Error("failed to write error response", zap.Error(err))
 	}

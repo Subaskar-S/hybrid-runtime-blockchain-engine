@@ -2,6 +2,7 @@ package streamer
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math/big"
@@ -130,6 +131,23 @@ func (s *EthBlockStreamer) streamBlocks(ctx context.Context) {
 	}
 
 	for {
+		// ReadMessage blocks until a message arrives or the connection closes —
+		// no busy-wait needed.
+		_, message, err := s.conn.ReadMessage()
+		if err != nil {
+			select {
+			case <-ctx.Done():
+				s.logger.Info("context cancelled, stopping block stream")
+			case <-s.stopCh:
+				s.logger.Info("stop signal received, stopping block stream")
+			default:
+				s.logger.Error("failed to read message", zap.Error(err))
+				s.isConnected = false
+			}
+			return
+		}
+
+		// Check for cancellation after each message
 		select {
 		case <-ctx.Done():
 			s.logger.Info("context cancelled, stopping block stream")
@@ -138,34 +156,23 @@ func (s *EthBlockStreamer) streamBlocks(ctx context.Context) {
 			s.logger.Info("stop signal received, stopping block stream")
 			return
 		default:
-			// Read message from WebSocket
-			_, message, err := s.conn.ReadMessage()
-			if err != nil {
-				s.logger.Error("failed to read message", zap.Error(err))
-				s.isConnected = false
+		}
+
+		// Parse and process block
+		block, err := s.parseBlockMessage(message)
+		if err != nil {
+			s.logger.Error("failed to parse block message", zap.Error(err))
+			continue
+		}
+
+		if block != nil && s.validateBlock(block) {
+			select {
+			case s.blocks <- block:
+				s.logger.Debug("forwarded block", zap.Uint64("block_number", block.Number))
+			case <-ctx.Done():
 				return
-			}
-
-			// Parse and process block
-			block, err := s.parseBlockMessage(message)
-			if err != nil {
-				s.logger.Error("failed to parse block message", zap.Error(err))
-				continue
-			}
-
-			if block != nil {
-				// Validate block before forwarding
-				if s.validateBlock(block) {
-					select {
-					case s.blocks <- block:
-						s.logger.Debug("forwarded block",
-							zap.Uint64("block_number", block.Number))
-					case <-ctx.Done():
-						return
-					case <-s.stopCh:
-						return
-					}
-				}
+			case <-s.stopCh:
+				return
 			}
 		}
 	}
@@ -263,18 +270,14 @@ func (s *EthBlockStreamer) validateBlock(block *ffi.Block) bool {
 	return true
 }
 
-// hexToBytes converts a hex string to bytes
+// hexToBytes converts a hex string to bytes using the standard library.
 func hexToBytes(s string) []byte {
 	if len(s)%2 != 0 {
 		s = "0" + s
 	}
-	
-	bytes := make([]byte, len(s)/2)
-	for i := 0; i < len(s); i += 2 {
-		var b byte
-		fmt.Sscanf(s[i:i+2], "%02x", &b)
-		bytes[i/2] = b
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		return nil
 	}
-	
-	return bytes
+	return b
 }

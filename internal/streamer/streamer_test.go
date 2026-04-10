@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hybrid-runtime-blockchain-engine/internal/ffi"
 	"go.uber.org/zap"
 )
 

@@ -140,11 +140,11 @@ func TestReorgEngine_DetectReorg_Sequential(t *testing.T) {
 	engine := NewReorgEngine(logger, ffiInstance)
 
 	// Add first block
-	block1 := &ffi.Block{Number: 1}
+	block1 := &ffi.Block{Number: 1, ParentHash: ffi.Hash{}, Timestamp: 1700000001}
 	engine.ringBuffer.Add(block1)
 
-	// Check sequential block
-	block2 := &ffi.Block{Number: 2}
+	// Sequential block: parent hash must match block1.Hash()
+	block2 := &ffi.Block{Number: 2, ParentHash: block1.Hash(), Timestamp: 1700000002}
 	isReorg, _, err := engine.DetectReorg(block2)
 
 	if err != nil {
@@ -160,14 +160,16 @@ func TestReorgEngine_DetectReorg_NonSequential(t *testing.T) {
 	ffiInstance := ffi.NewFFI()
 	engine := NewReorgEngine(logger, ffiInstance)
 
-	// Add blocks 1, 2, 3
-	for i := 1; i <= 3; i++ {
-		block := &ffi.Block{Number: uint64(i)}
-		engine.ringBuffer.Add(block)
-	}
+	// Add blocks 1, 2, 3 with proper hash chain
+	block1 := &ffi.Block{Number: 1, ParentHash: ffi.Hash{}, Timestamp: 1700000001}
+	block2 := &ffi.Block{Number: 2, ParentHash: block1.Hash(), Timestamp: 1700000002}
+	block3 := &ffi.Block{Number: 3, ParentHash: block2.Hash(), Timestamp: 1700000003}
+	engine.ringBuffer.Add(block1)
+	engine.ringBuffer.Add(block2)
+	engine.ringBuffer.Add(block3)
 
-	// Try to add block 5 (skip block 4)
-	block5 := &ffi.Block{Number: 5}
+	// block5 has block2 as parent — skips block3, triggering a reorg
+	block5 := &ffi.Block{Number: 5, ParentHash: block2.Hash(), Timestamp: 1700000005}
 	isReorg, forkPoint, err := engine.DetectReorg(block5)
 
 	if err != nil {
@@ -176,8 +178,8 @@ func TestReorgEngine_DetectReorg_NonSequential(t *testing.T) {
 	if !isReorg {
 		t.Error("Expected reorg detection for non-sequential block")
 	}
-	if forkPoint == 0 {
-		t.Error("Expected non-zero fork point")
+	if forkPoint != block2.Number {
+		t.Errorf("Expected fork point %d, got %d", block2.Number, forkPoint)
 	}
 }
 
@@ -232,18 +234,20 @@ func TestReorgEngine_MaxDepthExceeded(t *testing.T) {
 	ffiInstance := ffi.NewFFI()
 	engine := NewReorgEngine(logger, ffiInstance)
 
-	// Fill buffer with MaxReorgDepth blocks
-	for i := 0; i < MaxReorgDepth; i++ {
-		block := &ffi.Block{Number: uint64(i + 1)}
+	// Fill buffer with MaxReorgDepth blocks using a proper hash chain
+	prev := ffi.Hash{}
+	for i := 1; i <= MaxReorgDepth; i++ {
+		block := &ffi.Block{Number: uint64(i), ParentHash: prev, Timestamp: 1700000000 + uint64(i)}
 		engine.ringBuffer.Add(block)
+		prev = block.Hash()
 	}
 
-	// Try to detect reorg with depth > MaxReorgDepth
-	// This would require a block that's way ahead
-	block := &ffi.Block{Number: uint64(MaxReorgDepth + 20)}
-	_, _, err := engine.DetectReorg(block)
+	// A block whose parent is not in the ring buffer — fork point not found
+	orphan := &ffi.Block{Number: uint64(MaxReorgDepth + 1), ParentHash: ffi.Hash{0xff}, Timestamp: 1700000099}
+	_, _, err := engine.DetectReorg(orphan)
 
-	// Should detect as reorg but may fail due to depth
-	// The actual behavior depends on implementation
-	_ = err // Error handling depends on implementation
+	// Should return an error because the fork point is not in the buffer
+	if err == nil {
+		t.Error("Expected error when fork point not found in ring buffer")
+	}
 }

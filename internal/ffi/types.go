@@ -1,6 +1,7 @@
 package ffi
 
 import (
+	"crypto/sha256"
 	"math/big"
 )
 
@@ -62,11 +63,32 @@ type Block struct {
 	Transactions []Transaction
 }
 
-// Hash calculates the block hash (simplified for now)
+// Hash calculates the block hash using the same approach as the Rust implementation.
+// It serializes the block fields deterministically and hashes with SHA-256.
+// In production this would use Blake3 to match Rust exactly, but SHA-256 is
+// available without cgo and produces a stable, non-zero hash for reorg detection.
 func (b *Block) Hash() Hash {
-	// This should match the Rust implementation
-	// For now, return a simple hash
-	var h Hash
-	// In production, this would use the same Blake3 hashing as Rust
-	return h
+	var buf [8 + 32 + 8]byte
+	// block number big-endian
+	buf[0] = byte(b.Number >> 56)
+	buf[1] = byte(b.Number >> 48)
+	buf[2] = byte(b.Number >> 40)
+	buf[3] = byte(b.Number >> 32)
+	buf[4] = byte(b.Number >> 24)
+	buf[5] = byte(b.Number >> 16)
+	buf[6] = byte(b.Number >> 8)
+	buf[7] = byte(b.Number)
+	// parent hash
+	copy(buf[8:40], b.ParentHash[:])
+	// timestamp big-endian
+	buf[40] = byte(b.Timestamp >> 56)
+	buf[41] = byte(b.Timestamp >> 48)
+	buf[42] = byte(b.Timestamp >> 40)
+	buf[43] = byte(b.Timestamp >> 32)
+	buf[44] = byte(b.Timestamp >> 24)
+	buf[45] = byte(b.Timestamp >> 16)
+	buf[46] = byte(b.Timestamp >> 8)
+	buf[47] = byte(b.Timestamp)
+
+	return Hash(sha256.Sum256(buf[:]))
 }

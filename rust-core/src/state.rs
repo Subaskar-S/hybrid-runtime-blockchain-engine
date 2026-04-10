@@ -1,3 +1,4 @@
+#[allow(unused_imports)]
 use crate::types::{Account, Address, Block, Transaction, U256};
 use std::collections::HashMap;
 

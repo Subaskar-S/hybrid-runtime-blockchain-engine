@@ -2,7 +2,6 @@ package loadtest
 
 import (
 	"context"
-	"fmt"
 	"sort"
 	"time"
 
@@ -21,6 +20,7 @@ type LoadTester struct {
 	generator  *BlockGenerator
 	workerPool WorkerPoolInterface
 	metrics    *LoadTestMetrics
+	latencies  []float64 // exposed for testing
 }
 
 // NewLoadTester creates a new load tester
@@ -30,6 +30,7 @@ func NewLoadTester(logger *zap.Logger, workerPool WorkerPoolInterface, seed int6
 		generator:  NewBlockGenerator(seed),
 		workerPool: workerPool,
 		metrics:    NewLoadTestMetrics(),
+		latencies:  []float64{},
 	}
 }
 
@@ -190,10 +191,31 @@ done:
 		zap.Uint32("gc_count", result.GCCount),
 		zap.Float64("memory_growth_mb_per_sec", result.MemoryGrowthRateMBPS))
 
+	// Cache latencies for external access
+	lt.latencies = lt.metrics.GetLatencies()
+
 	return result, nil
 }
 
-// GetLatencies returns all recorded latencies
+// Run implements mcp.LoadTesterInterface — runs a load test at the given TPS
+// for the given duration and returns any error.
+func (lt *LoadTester) Run(tps int, duration time.Duration) error {
+	durationSeconds := int(duration.Seconds())
+	if durationSeconds < 1 {
+		durationSeconds = 1
+	}
+	config := LoadTestConfig{
+		TPS:                  tps,
+		DurationSeconds:      durationSeconds,
+		TransactionsPerBlock: 10,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), duration+10*time.Second)
+	defer cancel()
+	_, err := lt.RunLoadTest(ctx, config)
+	return err
+}
+
+// GetLatencies returns all recorded latencies from the most recent run
 func (lt *LoadTester) GetLatencies() []float64 {
 	return lt.metrics.GetLatencies()
 }
