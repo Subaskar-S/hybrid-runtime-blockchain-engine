@@ -1,5 +1,5 @@
 # ── Stage 1: Build Rust static library ──────────────────────────────────────
-FROM rust:1.75-slim AS rust-builder
+FROM rust:1.85-slim AS rust-builder
 
 WORKDIR /build/rust-core
 COPY rust-core/ .
