@@ -31,6 +31,7 @@ FROM debian:bookworm-slim AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
+        curl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=go-builder /build/bin/hybrid-runtime-blockchain-engine /usr/local/bin/
@@ -44,5 +45,9 @@ ENV WORKER_COUNT=4 \
     METRICS_PORT=9090 \
     MCP_PORT=8080 \
     LOAD_TEST_ENABLED=false
+
+# Health check using the liveness probe endpoint
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:9090/livez || exit 1
 
 ENTRYPOINT ["/usr/local/bin/hybrid-runtime-blockchain-engine"]
