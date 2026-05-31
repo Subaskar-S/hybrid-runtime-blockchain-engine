@@ -75,12 +75,14 @@ jobs:
         env:
           CGO_ENABLED: '1'
           CGO_LDFLAGS: '-L${{ github.workspace }}/rust-core/target/release'
+          LD_LIBRARY_PATH: '${{ github.workspace }}/rust-core/target/release'
         run: go test ./... -v -race -timeout=120s
 
       - name: Run Go tests with coverage
         env:
           CGO_ENABLED: '1'
           CGO_LDFLAGS: '-L${{ github.workspace }}/rust-core/target/release'
+          LD_LIBRARY_PATH: '${{ github.workspace }}/rust-core/target/release'
         run: |
           go test ./... -coverprofile=coverage.out -timeout=120s
           go tool cover -func=coverage.out | tail -1
@@ -121,6 +123,7 @@ jobs:
         env:
           CGO_ENABLED: '1'
           CGO_LDFLAGS: '-L${{ github.workspace }}/rust-core/target/release'
+          LD_LIBRARY_PATH: '${{ github.workspace }}/rust-core/target/release'
         run: go build -o bin/hybrid-runtime-blockchain-engine ./cmd/server
 
       - name: Upload binary
