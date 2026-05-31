@@ -1,8 +1,8 @@
 name: Auto Approve
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
+  check_suite:
+    types: [completed]
 
 permissions:
   checks: read
@@ -12,6 +12,9 @@ jobs:
   auto-approve:
     name: Auto Approve PR
     runs-on: ubuntu-latest
+    if: >
+      github.event.check_suite.conclusion == 'success' &&
+      github.event.check_suite.pull_requests[0] != null
     steps:
       - name: Generate GitHub App token
         id: app-token
@@ -20,17 +23,9 @@ jobs:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
-      - name: Wait for CI checks to pass
-        uses: lewagon/wait-on-check-action@v1.3.4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          repo-token: ${{ github.token }}
-          check-regexp: '^CI/'
-          wait-interval: 15
-          allowed-conclusions: success
-
       - name: Auto approve PR
         uses: hmarr/auto-approve-action@v4
         with:
           github-token: ${{ steps.app-token.outputs.token }}
+          pull-request-number: ${{ github.event.check_suite.pull_requests[0].number }}
           review-message: "Auto-approved: all CI checks passed ✅"
