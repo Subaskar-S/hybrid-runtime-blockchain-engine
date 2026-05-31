@@ -125,14 +125,47 @@ func (c *Config) Validate() error {
 // containsHardcodedSecret checks if a string contains common secret patterns
 func containsHardcodedSecret(s string) bool {
 	// Check for common API key patterns in URLs
-	// Example: https://mainnet.infura.io/v3/YOUR-API-KEY
-	// We look for patterns like "/v3/" followed by a long alphanumeric string
-	
-	// This is a simple heuristic - in production, you might want more sophisticated detection
-	// For now, we'll just warn if the URL contains common API key patterns
-	
-	// Note: This is intentionally conservative to avoid false positives
-	// A more robust implementation would use regex or URL parsing
-	
-	return false // Placeholder - can be enhanced based on specific requirements
+	// Infura: /v3/<32-hex-char-key>
+	// Alchemy: /v2/<32-char-key>
+	// Generic: long hex strings that look like API keys
+
+	// Look for path segments that are 32+ hex characters (typical API keys)
+	parts := splitOnSlashes(s)
+	for _, part := range parts {
+		if len(part) >= 32 && isHexString(part) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// splitOnSlashes splits a string on '/' characters
+func splitOnSlashes(s string) []string {
+	var parts []string
+	current := ""
+	for _, c := range s {
+		if c == '/' {
+			if current != "" {
+				parts = append(parts, current)
+			}
+			current = ""
+		} else {
+			current += string(c)
+		}
+	}
+	if current != "" {
+		parts = append(parts, current)
+	}
+	return parts
+}
+
+// isHexString checks if a string contains only hex characters
+func isHexString(s string) bool {
+	for _, c := range s {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
 }
