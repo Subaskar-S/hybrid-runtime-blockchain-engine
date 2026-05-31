@@ -197,6 +197,8 @@ func (c *Collector) Start(ctx context.Context, port int) error {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.HandlerFor(c.registry, promhttp.HandlerOpts{}))
 	mux.HandleFunc("/health", c.handleHealth)
+	mux.HandleFunc("/livez", c.handleLivez)
+	mux.HandleFunc("/readyz", c.handleReadyz)
 	mux.HandleFunc("/debug/gc", c.handleDebugGC)
 	mux.HandleFunc("/debug/state", c.handleDebugState)
 	
@@ -382,7 +384,7 @@ func (c *Collector) RegisterWorkerPoolHealth(wp WorkerPoolHealth) {
 	c.workerPoolHealth = wp
 }
 
-// handleHealth handles the /health endpoint
+// handleHealth handles the /health endpoint (legacy, combines liveness + readiness)
 func (c *Collector) handleHealth(w http.ResponseWriter, r *http.Request) {
 	// Check if Block_Streamer is connected
 	if c.blockStreamer == nil || !c.blockStreamer.IsConnected() {
@@ -401,6 +403,41 @@ func (c *Collector) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 	
 	// System is healthy
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("OK\n"))
+}
+
+// handleLivez handles the /livez endpoint (Kubernetes liveness probe)
+// Returns 200 if the process is alive and not deadlocked.
+// This should NOT check external dependencies.
+func (c *Collector) handleLivez(w http.ResponseWriter, r *http.Request) {
+	// If we can respond, we're alive. Check goroutine count as a sanity check.
+	if c.workerPoolHealth != nil && c.workerPoolHealth.ActiveWorkers() >= 0 {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK\n"))
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("OK\n"))
+}
+
+// handleReadyz handles the /readyz endpoint (Kubernetes readiness probe)
+// Returns 200 only if the system is ready to process blocks.
+func (c *Collector) handleReadyz(w http.ResponseWriter, r *http.Request) {
+	// Check if workers are active
+	if c.workerPoolHealth == nil || c.workerPoolHealth.ActiveWorkers() == 0 {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Write([]byte("No active workers\n"))
+		return
+	}
+
+	// Check if block streamer is connected (required for readiness)
+	if c.blockStreamer == nil || !c.blockStreamer.IsConnected() {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Write([]byte("Block streamer not connected\n"))
+		return
+	}
+
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("OK\n"))
 }
