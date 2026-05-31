@@ -10,6 +10,10 @@ pub struct StateSnapshot {
     pub state_root: [u8; 32],
 }
 
+/// Maximum number of snapshots retained for rollback.
+/// Matches the Go-side MaxReorgDepth constant.
+const MAX_HISTORY_SIZE: usize = 10;
+
 /// State engine - maintains blockchain state deterministically
 #[derive(Debug)]
 pub struct StateEngine {
@@ -19,7 +23,7 @@ pub struct StateEngine {
     block_number: u64,
     /// Current state root hash
     state_root: [u8; 32],
-    /// History of state snapshots for rollback
+    /// History of state snapshots for rollback (bounded to MAX_HISTORY_SIZE)
     history: Vec<StateSnapshot>,
 }
 
@@ -95,13 +99,19 @@ impl StateEngine {
             ));
         }
 
-        // Save snapshot before applying block
+        // Save snapshot before applying block (bounded history)
         let snapshot = StateSnapshot {
             block_number: self.block_number,
             state: self.state.clone(),
             state_root: self.state_root,
         };
         self.history.push(snapshot);
+
+        // Prune oldest snapshots to keep history bounded
+        if self.history.len() > MAX_HISTORY_SIZE {
+            let excess = self.history.len() - MAX_HISTORY_SIZE;
+            self.history.drain(0..excess);
+        }
 
         // Process transactions
         for tx in &block.transactions {
@@ -323,5 +333,52 @@ mod tests {
 
         // State roots should be identical
         assert_eq!(engine1.state_root(), engine2.state_root());
+    }
+
+    #[test]
+    fn test_history_bounded() {
+        let mut engine = StateEngine::new();
+
+        // Apply more blocks than MAX_HISTORY_SIZE
+        for i in 1..=(MAX_HISTORY_SIZE as u64 + 5) {
+            let block = create_test_block(i, [0u8; 32]);
+            engine.apply_block(&block).unwrap();
+        }
+
+        // History should be capped at MAX_HISTORY_SIZE
+        assert!(
+            engine.history_length() <= MAX_HISTORY_SIZE,
+            "History length {} exceeds max {}",
+            engine.history_length(),
+            MAX_HISTORY_SIZE
+        );
+    }
+
+    #[test]
+    fn test_rollback_within_bounded_history() {
+        let mut engine = StateEngine::new();
+
+        // Apply MAX_HISTORY_SIZE + 5 blocks
+        let total_blocks = MAX_HISTORY_SIZE as u64 + 5;
+        for i in 1..=total_blocks {
+            let block = create_test_block(i, [0u8; 32]);
+            engine.apply_block(&block).unwrap();
+        }
+
+        // Should be able to rollback to recent blocks (within the window)
+        let recent_block = total_blocks - 3;
+        let result = engine.rollback_to(recent_block);
+        assert!(result.is_ok(), "Should be able to rollback to recent block");
+        assert_eq!(engine.block_number(), recent_block);
+
+        // Should NOT be able to rollback to very old blocks (pruned)
+        let old_block = 1u64;
+        let mut engine2 = StateEngine::new();
+        for i in 1..=total_blocks {
+            let block = create_test_block(i, [0u8; 32]);
+            engine2.apply_block(&block).unwrap();
+        }
+        let result = engine2.rollback_to(old_block);
+        assert!(result.is_err(), "Should not be able to rollback to pruned block");
     }
 }
