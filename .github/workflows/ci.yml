@@ -50,6 +50,8 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: go.sum
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -67,7 +69,7 @@ jobs:
         run: cargo build --release
 
       - name: Download Go modules
-        run: go mod download
+        run: go mod download -x
 
       - name: Run Go tests with race detector
         env:
@@ -100,6 +102,8 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: go.sum
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -111,7 +115,7 @@ jobs:
         run: cargo build --release
 
       - name: Download Go modules
-        run: go mod download
+        run: go mod download -x
 
       - name: Build Go binary
         env:

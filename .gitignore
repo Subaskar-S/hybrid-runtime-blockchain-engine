@@ -17,7 +17,6 @@ rust-core/target/
 rust-core/Cargo.lock
 
 # Go
-go.sum
 
 # IDE
 .vscode/
