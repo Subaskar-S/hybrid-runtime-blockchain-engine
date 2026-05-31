@@ -66,6 +66,9 @@ jobs:
         working-directory: rust-core
         run: cargo build --release
 
+      - name: Download Go modules
+        run: go mod download
+
       - name: Run Go tests with race detector
         env:
           CGO_ENABLED: '1'
@@ -106,6 +109,9 @@ jobs:
       - name: Build Rust library
         working-directory: rust-core
         run: cargo build --release
+
+      - name: Download Go modules
+        run: go mod download
 
       - name: Build Go binary
         env:
