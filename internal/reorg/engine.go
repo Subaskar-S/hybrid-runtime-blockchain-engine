@@ -2,6 +2,7 @@ package reorg
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/hybrid-runtime-blockchain-engine/internal/ffi"
@@ -28,6 +29,7 @@ type ReorgEngine struct {
 	ringBuffer  *RingBuffer
 	reorgCount  int64
 	reorgEvents []ReorgEvent
+	mu          sync.RWMutex // protects reorgEvents and reorgCount
 }
 
 // ReorgEvent represents a detected reorganization
@@ -224,8 +226,10 @@ func (re *ReorgEngine) HandleReorg(forkPoint uint64, newBlock *ffi.Block) error 
 		Depth:              depth,
 		RollbackDurationMs: float64(duration.Milliseconds()),
 	}
+	re.mu.Lock()
 	re.reorgEvents = append(re.reorgEvents, event)
 	re.reorgCount++
+	re.mu.Unlock()
 
 	re.logger.Info("reorganization handled successfully",
 		zap.Uint64("fork_point", forkPoint),
@@ -248,6 +252,9 @@ func (re *ReorgEngine) Rollback(forkPoint uint64) error {
 
 // GetReorgHistory returns recent reorg events
 func (re *ReorgEngine) GetReorgHistory(limit int) []ReorgEvent {
+	re.mu.RLock()
+	defer re.mu.RUnlock()
+
 	if limit <= 0 || limit > len(re.reorgEvents) {
 		limit = len(re.reorgEvents)
 	}
@@ -258,11 +265,16 @@ func (re *ReorgEngine) GetReorgHistory(limit int) []ReorgEvent {
 		start = 0
 	}
 
-	return re.reorgEvents[start:]
+	// Return a copy to avoid data races after releasing the lock
+	events := make([]ReorgEvent, len(re.reorgEvents[start:]))
+	copy(events, re.reorgEvents[start:])
+	return events
 }
 
 // GetReorgCount returns the total number of reorgs processed
 func (re *ReorgEngine) GetReorgCount() int64 {
+	re.mu.RLock()
+	defer re.mu.RUnlock()
 	return re.reorgCount
 }
 
@@ -275,9 +287,27 @@ type Stats struct {
 
 // GetStats returns current statistics
 func (re *ReorgEngine) GetStats() Stats {
+	re.mu.RLock()
+	defer re.mu.RUnlock()
 	return Stats{
 		ReorgCount:   re.reorgCount,
 		BufferSize:   re.ringBuffer.Size(),
-		RecentReorgs: re.GetReorgHistory(10),
+		RecentReorgs: re.GetReorgHistoryLocked(10),
 	}
+}
+
+// GetReorgHistoryLocked returns recent reorg events (caller must hold mu.RLock)
+func (re *ReorgEngine) GetReorgHistoryLocked(limit int) []ReorgEvent {
+	if limit <= 0 || limit > len(re.reorgEvents) {
+		limit = len(re.reorgEvents)
+	}
+
+	start := len(re.reorgEvents) - limit
+	if start < 0 {
+		start = 0
+	}
+
+	events := make([]ReorgEvent, len(re.reorgEvents[start:]))
+	copy(events, re.reorgEvents[start:])
+	return events
 }
