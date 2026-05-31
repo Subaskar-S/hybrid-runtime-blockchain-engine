@@ -172,8 +172,9 @@ make clean      # Remove build artifacts
 
 ## Documentation
 
-- [Developer Guide](DEVELOPER_GUIDE.md) — Setup, build, run, test, troubleshoot
-- [Design Document](design.md) — Architecture, algorithms, correctness properties
+- [Developer Guide](docs/DEVELOPER_GUIDE.md) — Setup, build, run, test, troubleshoot
+- [Design Document](docs/design.md) — Architecture, algorithms, correctness properties
+- [Requirements](docs/requirements.md) — Functional and non-functional requirements
 
 ## License
 
