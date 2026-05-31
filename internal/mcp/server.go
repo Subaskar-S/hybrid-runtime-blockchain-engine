@@ -106,6 +106,9 @@ func (s *Server) Stop() error {
 	return s.server.Shutdown(ctx)
 }
 
+// maxRequestBodySize is the maximum allowed request body size (1MB)
+const maxRequestBodySize = 1 * 1024 * 1024
+
 // handleRequest handles incoming JSON-RPC requests
 func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	// Only accept POST requests
@@ -113,6 +116,9 @@ func (s *Server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, nil, InvalidRequest, "Method must be POST")
 		return
 	}
+
+	// Limit request body size to prevent DoS
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodySize)
 
 	// Parse JSON-RPC request
 	var req JSONRPCRequest
