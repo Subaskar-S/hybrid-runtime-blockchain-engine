@@ -31,6 +31,7 @@ type Pool struct {
 	processor       BlockProcessor
 	blocks          chan *ffi.Block
 	stopCh          chan struct{}
+	stopOnce        sync.Once
 	wg              sync.WaitGroup
 	activeWorkers   int32
 	numWorkers      int
@@ -81,15 +82,17 @@ func (p *Pool) Submit(block *ffi.Block) error {
 	}
 }
 
-// Stop gracefully stops the worker pool
+// Stop gracefully stops the worker pool.
+// Safe to call multiple times — only the first call has effect.
 func (p *Pool) Stop(ctx context.Context) error {
 	p.logger.Info("stopping worker pool")
 
-	// Signal stop — workers will drain remaining items then exit.
-	// We close stopCh first so Submit() returns an error immediately,
-	// then close blocks so workers exit their range loop cleanly.
-	close(p.stopCh)
-	close(p.blocks)
+	// stopOnce ensures close(stopCh) and close(blocks) happen exactly once,
+	// making Stop() safe to call concurrently or multiple times.
+	p.stopOnce.Do(func() {
+		close(p.stopCh)
+		close(p.blocks)
+	})
 
 	// Wait for workers to complete with timeout
 	done := make(chan struct{})
@@ -139,8 +142,10 @@ func (p *Pool) worker(ctx context.Context, id int) {
 }
 
 // processBlockSafe processes a block with panic recovery.
-// On panic the worker increments the panic counter and returns; the caller
-// (worker goroutine) will exit and the pool will restart it.
+// A panic inside ProcessBlock is caught by the deferred recover, the panic
+// counter is incremented and the error is logged. The worker goroutine is NOT
+// terminated — it returns to its for-range loop and continues processing the
+// next block. Pool capacity is preserved across panics.
 func (p *Pool) processBlockSafe(ctx context.Context, workerID int, block *ffi.Block) {
 	defer func() {
 		if r := recover(); r != nil {
