@@ -86,7 +86,8 @@ func main() {
 	workerPool.SetOnBlockProcessed(metricsCollector.RecordBlockProcessed)
 	workerPool.SetOnPanic(metricsCollector.RecordWorkerPanic)
 	reorgEngine.SetOnReorg(metricsCollector.RecordReorg)
-	ffiLayer.SetOnApplyBlock(metricsCollector.RecordRustApplyBlock)
+	// Note: ffiLayer.SetOnApplyBlock is set after runtimeTools is created below,
+	// so both the Prometheus histogram and the MCP latency tracker are fed.
 
 	if err := metricsCollector.Start(context.Background(), cfg.MetricsPort); err != nil {
 		logger.Fatal("Failed to start Metrics Collector", zap.Error(err))
@@ -118,6 +119,14 @@ func main() {
 		runtimeTools.SetLoadTester(lt)
 		logger.Info("Load Tester enabled")
 	}
+
+	// Wire apply_block latency to both the Prometheus histogram (TD-3) and the
+	// MCP ApplyBlockLatencyTracker (TD-4). Done here because runtimeTools must
+	// exist before we can reference its tracker.
+	ffiLayer.SetOnApplyBlock(func(d time.Duration) {
+		metricsCollector.RecordRustApplyBlock(d)
+		runtimeTools.GetApplyBlockLatencyTracker().Record(float64(d.Milliseconds()))
+	})
 
 	// Start Worker Pool
 	if err := workerPool.Start(context.Background(), cfg.WorkerCount); err != nil {
