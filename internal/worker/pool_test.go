@@ -252,8 +252,78 @@ func TestPool_ActiveWorkers(t *testing.T) {
 	}
 }
 
-func TestPool_GetStats(t *testing.T) {
+func TestPool_StopIdempotent(t *testing.T) {
+	// Stop() must be safe to call multiple times without panicking.
 	logger, _ := zap.NewDevelopment()
+	processor := &MockProcessor{}
+	pool := NewPool(logger, processor)
+
+	ctx := context.Background()
+	if err := pool.Start(ctx, 2); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+
+	stopCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	if err := pool.Stop(stopCtx); err != nil {
+		t.Errorf("first Stop failed: %v", err)
+	}
+
+	// Second call must not panic or return an error
+	if err := pool.Stop(stopCtx); err != nil {
+		t.Errorf("second Stop failed: %v", err)
+	}
+}
+
+func TestPool_PanicPreservesWorkerCount(t *testing.T) {
+	// After a panic the worker goroutine must continue running.
+	// ActiveWorkers must stay at numWorkers.
+	logger, _ := zap.NewDevelopment()
+
+	panicOnce := int32(1) // panic only on the first call
+	processor := &MockProcessor{}
+
+	pool := NewPool(logger, &panicOnceProcessor{inner: processor, panicOnce: &panicOnce})
+
+	ctx := context.Background()
+	if err := pool.Start(ctx, 2); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer pool.Stop(ctx)
+
+	// Submit the block that will panic on one worker
+	block := &ffi.Block{Number: 1}
+	if err := pool.Submit(block); err != nil {
+		t.Fatalf("Submit failed: %v", err)
+	}
+
+	// Give the panic time to be handled
+	time.Sleep(200 * time.Millisecond)
+
+	stats := pool.GetStats()
+	if stats.PanicCount == 0 {
+		t.Error("expected panic count > 0")
+	}
+	if stats.ActiveWorkers != 2 {
+		t.Errorf("expected 2 active workers after panic, got %d", stats.ActiveWorkers)
+	}
+}
+
+// panicOnceProcessor panics on the first ProcessBlock call, then delegates normally.
+type panicOnceProcessor struct {
+	inner     BlockProcessor
+	panicOnce *int32
+}
+
+func (p *panicOnceProcessor) ProcessBlock(block *ffi.Block) error {
+	if atomic.CompareAndSwapInt32(p.panicOnce, 1, 0) {
+		panic("one-time test panic")
+	}
+	return p.inner.ProcessBlock(block)
+}
+
+func TestPool_GetStats(t *testing.T) {	logger, _ := zap.NewDevelopment()
 	processor := &MockProcessor{}
 	pool := NewPool(logger, processor)
 
