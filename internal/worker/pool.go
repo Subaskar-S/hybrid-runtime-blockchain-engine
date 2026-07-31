@@ -37,6 +37,23 @@ type Pool struct {
 	numWorkers      int
 	panicCount      int64
 	processedBlocks int64
+
+	// Event callbacks — injected from main.go to avoid import cycles.
+	// Both are optional; nil means no-op.
+	onBlockProcessed func(duration time.Duration)
+	onPanic          func()
+}
+
+// SetOnBlockProcessed sets the callback invoked after each successfully
+// processed block. Safe to call before Start(). Pass nil to disable.
+func (p *Pool) SetOnBlockProcessed(fn func(time.Duration)) {
+	p.onBlockProcessed = fn
+}
+
+// SetOnPanic sets the callback invoked each time a worker recovers from a
+// panic. Safe to call before Start(). Pass nil to disable.
+func (p *Pool) SetOnPanic(fn func()) {
+	p.onPanic = fn
 }
 
 // NewPool creates a new worker pool
@@ -165,16 +182,23 @@ func (p *Pool) processBlockSafe(ctx context.Context, workerID int, block *ffi.Bl
 
 	atomic.AddInt64(&p.processedBlocks, 1)
 
+	duration := time.Since(start)
+	if p.onBlockProcessed != nil {
+		p.onBlockProcessed(duration)
+	}
+
 	p.logger.Debug("block processed successfully",
 		zap.Int("worker_id", workerID),
 		zap.Uint64("block_number", block.Number),
-		zap.Duration("duration", time.Since(start)))
+		zap.Duration("duration", duration))
 }
 
 // handlePanic handles a panic from a worker
 func (p *Pool) handlePanic(workerID int, r interface{}) {
 	atomic.AddInt64(&p.panicCount, 1)
-	
+	if p.onPanic != nil {
+		p.onPanic()
+	}
 	p.logger.Error("worker panic",
 		zap.Int("worker_id", workerID),
 		zap.Any("panic", r),
