@@ -113,59 +113,7 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("MCP_PORT must be between 1 and 65535, got %d", c.MCPPort)
 	}
 
-	// Reject configurations with hardcoded secrets
-	// Check for common secret patterns in ETH_RPC_URL
-	if containsHardcodedSecret(c.ETHRPCURL) {
-		return fmt.Errorf("ETH_RPC_URL appears to contain a hardcoded secret (API key in URL). Use environment variable substitution instead")
-	}
-
 	return nil
 }
 
-// containsHardcodedSecret checks if a string contains common secret patterns
-func containsHardcodedSecret(s string) bool {
-	// Check for common API key patterns in URLs
-	// Infura: /v3/<32-hex-char-key>
-	// Alchemy: /v2/<32-char-key>
-	// Generic: long hex strings that look like API keys
 
-	// Look for path segments that are 32+ hex characters (typical API keys)
-	parts := splitOnSlashes(s)
-	for _, part := range parts {
-		if len(part) >= 32 && isHexString(part) {
-			return true
-		}
-	}
-
-	return false
-}
-
-// splitOnSlashes splits a string on '/' characters
-func splitOnSlashes(s string) []string {
-	var parts []string
-	current := ""
-	for _, c := range s {
-		if c == '/' {
-			if current != "" {
-				parts = append(parts, current)
-			}
-			current = ""
-		} else {
-			current += string(c)
-		}
-	}
-	if current != "" {
-		parts = append(parts, current)
-	}
-	return parts
-}
-
-// isHexString checks if a string contains only hex characters
-func isHexString(s string) bool {
-	for _, c := range s {
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
-			return false
-		}
-	}
-	return true
-}
