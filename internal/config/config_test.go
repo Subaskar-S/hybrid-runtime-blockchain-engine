@@ -283,57 +283,42 @@ func TestLoad_BooleanVariations(t *testing.T) {
 	}
 }
 
-func TestContainsHardcodedSecret(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    string
-		expected bool
+func TestLoad_RealProviderURLs(t *testing.T) {
+	// These are real-world RPC URL formats that must be accepted.
+	// Previously rejected by a broken secret detector (TD-5).
+	providerURLs := []struct {
+		name string
+		url  string
 	}{
-		{
-			name:     "localhost URL - no secret",
-			input:    "ws://localhost:8545",
-			expected: false,
-		},
-		{
-			name:     "short path segment - no secret",
-			input:    "https://mainnet.infura.io/v3/test",
-			expected: false,
-		},
-		{
-			name:     "infura with real API key (32 hex chars)",
-			input:    "https://mainnet.infura.io/v3/abcdef1234567890abcdef1234567890",
-			expected: true,
-		},
-		{
-			name:     "alchemy with real API key",
-			input:    "wss://eth-mainnet.g.alchemy.com/v2/aAbBcCdDeEfF1234567890aAbBcCdDeE",
-			expected: true,
-		},
-		{
-			name:     "URL with non-hex path segment",
-			input:    "https://example.com/some-long-path-that-is-not-hex-chars",
-			expected: false,
-		},
+		{"infura mainnet", "wss://mainnet.infura.io/ws/v3/abcdef1234567890abcdef1234567890"},
+		{"infura https", "https://mainnet.infura.io/v3/abcdef1234567890abcdef1234567890"},
+		{"alchemy mainnet", "wss://eth-mainnet.g.alchemy.com/v2/aAbBcCdDeEfF1234567890aAbBcCdDeE"},
+		{"quicknode", "wss://bold-late-bird.quiknode.pro/abcdef1234567890abcdef1234567890abcdef12/"},
+		{"localhost", "ws://localhost:8545"},
+		{"local geth", "http://127.0.0.1:8545"},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := containsHardcodedSecret(tt.input)
-			assert.Equal(t, tt.expected, result)
+	for _, tc := range providerURLs {
+		t.Run(tc.name, func(t *testing.T) {
+			os.Setenv("ETH_RPC_URL", tc.url)
+			defer os.Unsetenv("ETH_RPC_URL")
+
+			cfg, err := Load()
+			require.NoError(t, err, "URL %q should be accepted", tc.url)
+			assert.Equal(t, tc.url, cfg.ETHRPCURL)
 		})
 	}
 }
 
-func TestValidate_HardcodedSecret(t *testing.T) {
+func TestValidate_EmptyURL(t *testing.T) {
 	cfg := &Config{
-		ETHRPCURL:       "https://mainnet.infura.io/v3/abcdef1234567890abcdef1234567890",
-		WorkerCount:     4,
-		MetricsPort:     9090,
-		MCPPort:         8080,
-		LoadTestEnabled: false,
+		ETHRPCURL:   "",
+		WorkerCount: 4,
+		MetricsPort: 9090,
+		MCPPort:     8080,
 	}
 
 	err := cfg.Validate()
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "hardcoded secret")
+	assert.Contains(t, err.Error(), "ETH_RPC_URL cannot be empty")
 }
