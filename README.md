@@ -55,6 +55,8 @@ ETH_RPC_URL="wss://mainnet.infura.io/ws/v3/YOUR-KEY" make run
 ETH_RPC_URL=ws://localhost:8545 LOAD_TEST_ENABLED=true make run
 ```
 
+> In load-test mode use `/livez` for health checks — `/health` returns 503 when the streamer is not connected.
+
 ### Docker
 
 ```bash
@@ -77,7 +79,7 @@ docker compose up
 |----------|------|-------------|
 | `GET /metrics` | 9090 | Prometheus metrics |
 | `GET /health` | 9090 | Health check (200/503) |
-| `GET /livez` | 9090 | Kubernetes liveness probe |
+| `GET /livez` | 9090 | Kubernetes liveness probe (always 200) |
 | `GET /readyz` | 9090 | Kubernetes readiness probe |
 | `GET /debug/gc` | 9090 | GC statistics (JSON) |
 | `GET /debug/state` | 9090 | State root and size (JSON) |
@@ -85,7 +87,7 @@ docker compose up
 
 ## MCP Tools
 
-The MCP server exposes 11 runtime introspection tools via JSON-RPC:
+The MCP server exposes 11 runtime introspection tools via JSON-RPC. Rate limited to 10 requests/minute per tool. Binds to localhost only.
 
 ```bash
 curl -X POST http://localhost:8080 \
@@ -93,21 +95,19 @@ curl -X POST http://localhost:8080 \
   -d '{"jsonrpc":"2.0","method":"get_gc_stats","params":{},"id":1}'
 ```
 
-| Tool | Description |
-|------|-------------|
-| `get_gc_stats` | Go GC pause times and counts |
-| `get_heap_usage` | Heap memory allocation |
-| `get_goroutine_count` | Active goroutines |
-| `get_latency_distribution` | Block processing p50/p95/p99/max |
-| `get_reorg_history` | Recent chain reorganizations |
-| `get_state_root` | Current Blake3 state root hash |
-| `get_state_size` | State entry count and memory |
-| `get_apply_block_latency` | Rust core execution times |
-| `validate_determinism` | State root consistency check |
-| `compare_gc_vs_core_latency` | GC impact analysis |
-| `run_load_test` | Execute synthetic load test |
-
-Rate limited to 10 requests/minute per tool. Binds to localhost only.
+| Tool | Description | Status |
+|------|-------------|--------|
+| `get_gc_stats` | Go GC pause times and counts | ✅ |
+| `get_heap_usage` | Heap memory allocation | ✅ |
+| `get_goroutine_count` | Active goroutines | ✅ |
+| `get_latency_distribution` | Block processing p50/p95/p99/max | ✅ |
+| `get_reorg_history` | Recent chain reorganizations | ✅ |
+| `get_state_root` | Current Blake3 state root hash | ✅ |
+| `get_state_size` | State entry count and memory | ✅ |
+| `compare_gc_vs_core_latency` | GC impact analysis | ✅ |
+| `run_load_test` | Execute synthetic load test (requires `LOAD_TEST_ENABLED=true`) | ✅ |
+| `get_apply_block_latency` | Rust core execution times | ⚠️ latency tracker not yet wired |
+| `validate_determinism` | State root consistency check | 🚧 requires block history (in progress) |
 
 ## Project Structure
 
@@ -131,6 +131,7 @@ Rate limited to 10 requests/minute per tool. Binds to localhost only.
 ├── docker/
 │   ├── Dockerfile       Multi-stage build (Rust → Go → debian-slim)
 │   └── prometheus.yml   Prometheus scrape config
+├── .kiro/steering/      Kiro AI agent context files
 ├── .github/workflows/
 │   ├── ci.yml           CI pipeline (test, build, docker)
 │   └── auto-approve.yml Auto-approve PRs after CI passes
@@ -165,16 +166,35 @@ make clean      # Remove build artifacts
 ## Key Design Decisions
 
 - **Bounded rollback history** — Rust keeps only the last 10 state snapshots (matching max reorg depth), preventing unbounded memory growth
-- **Binary serialization** — Custom binary format with version byte, not JSON, for FFI performance
+- **Binary serialization** — Custom binary format with version byte, not JSON, for FFI performance (~200ns vs ~5µs per block)
 - **Backpressure** — Worker pool uses bounded channels (2× worker count) to prevent memory exhaustion
-- **Panic isolation** — Go worker panics are recovered; Rust errors return codes without crossing the FFI boundary
+- **Panic isolation** — Go worker panics are recovered; Rust errors return integer codes without crossing the FFI boundary
 - **Auto-reconnection** — Block streamer reconnects with exponential backoff on WebSocket disconnects
+- **Localhost-only MCP** — MCP server binds to `127.0.0.1` only; use a reverse proxy for remote access
+
+## Known Issues & In-Progress Work
+
+| # | Issue | Branch |
+|---|-------|--------|
+| TD-5 | Config secret detector incorrectly rejects valid Infura/Alchemy RPC URLs | `fix/td5-secret-detector` |
+| TD-1 | Worker goroutine exits permanently after panic instead of restarting | `fix/td1-worker-panic-restart` |
+| TD-3 | Prometheus histograms/counters not wired to event sites (always zero) | `fix/td3-metrics-wiring` |
+| TD-4 | `get_apply_block_latency` MCP tracker never populated | `fix/td4-apply-block-latency` |
+| TD-7 | `/health` always returns 503 in load-test mode | `fix/td7-health-loadtest` |
+| TD-9 | No `LOG_LEVEL` environment variable | `fix/td9-log-level` |
+| TD-2 | `validate_determinism` MCP tool is a stub | `fix/td2-validate-determinism` |
+| TD-8 | No block history store (prerequisite for TD-2) | `fix/td8-block-history` |
+| TD-6 | Reorg simulation mode not implemented (Req 4.5) | `fix/td6-reorg-simulation` |
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to contribute and [CLAUDE.md](CLAUDE.md) for coding standards.
 
 ## Documentation
 
 - [Developer Guide](docs/DEVELOPER_GUIDE.md) — Setup, build, run, test, troubleshoot
 - [Design Document](docs/design.md) — Architecture, algorithms, correctness properties
 - [Requirements](docs/requirements.md) — Functional and non-functional requirements
+- [Contributing](CONTRIBUTING.md) — Workflow, coding standards, PR guidelines
+- [Technical Debt](/.kiro/steering/technical-debt.md) — Known issues and fix plans
 
 ## License
 
