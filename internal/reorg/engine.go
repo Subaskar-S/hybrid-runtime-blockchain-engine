@@ -30,6 +30,16 @@ type ReorgEngine struct {
 	reorgCount  int64
 	reorgEvents []ReorgEvent
 	mu          sync.RWMutex // protects reorgEvents and reorgCount
+
+	// onReorg is called after every successfully handled reorg.
+	// Injected from main.go to avoid import cycles. nil means no-op.
+	onReorg func(depth int, duration time.Duration)
+}
+
+// SetOnReorg sets the callback invoked after each reorg is handled.
+// Safe to call before the engine processes any blocks. Pass nil to disable.
+func (re *ReorgEngine) SetOnReorg(fn func(depth int, duration time.Duration)) {
+	re.onReorg = fn
 }
 
 // ReorgEvent represents a detected reorganization
@@ -235,6 +245,10 @@ func (re *ReorgEngine) HandleReorg(forkPoint uint64, newBlock *ffi.Block) error 
 		zap.Uint64("fork_point", forkPoint),
 		zap.Int("depth", event.Depth),
 		zap.Float64("duration_ms", event.RollbackDurationMs))
+
+	if re.onReorg != nil {
+		re.onReorg(event.Depth, duration)
+	}
 
 	return nil
 }

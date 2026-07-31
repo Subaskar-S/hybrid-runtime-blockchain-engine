@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 	"unsafe"
 
 	"go.uber.org/zap"
@@ -28,6 +29,19 @@ type FFI struct {
 	mu              sync.Mutex
 	lastBlockNumber uint64
 	validator       *Validator
+
+	// onApplyBlock is called after every successful apply_block FFI call
+	// with the measured execution duration. Injected from main.go to avoid
+	// import cycles. nil means no-op.
+	onApplyBlock func(duration time.Duration)
+}
+
+// SetOnApplyBlock sets the callback invoked after each successful apply_block
+// call. Safe to call before any blocks are processed. Pass nil to disable.
+func (f *FFI) SetOnApplyBlock(fn func(time.Duration)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.onApplyBlock = fn
 }
 
 // Stats represents statistics from the Rust core
@@ -89,16 +103,18 @@ func (f *FFI) ApplyBlock(block *Block) (Hash, error) {
 		return Hash{}, fmt.Errorf("serialized data validation failed: %w", err)
 	}
 
-	// Call Rust FFI
+	// Call Rust FFI — time the actual cgo call only
 	var resultPtr *C.uchar
 	var resultLen C.size_t
 
+	ffiStart := time.Now()
 	ret := C.apply_block(
 		(*C.uchar)(unsafe.Pointer(&data[0])),
 		C.size_t(len(data)),
 		&resultPtr,
 		&resultLen,
 	)
+	ffiDuration := time.Since(ffiStart)
 
 	if ret != 0 {
 		return Hash{}, fmt.Errorf("apply_block failed with code %d", ret)
@@ -116,6 +132,12 @@ func (f *FFI) ApplyBlock(block *Block) (Hash, error) {
 
 	// Update last block number
 	f.lastBlockNumber = block.Number
+
+	// Fire latency callback after releasing nothing — we still hold the mutex,
+	// which is fine since the callback is a non-blocking counter increment.
+	if f.onApplyBlock != nil {
+		f.onApplyBlock(ffiDuration)
+	}
 
 	return stateRoot, nil
 }

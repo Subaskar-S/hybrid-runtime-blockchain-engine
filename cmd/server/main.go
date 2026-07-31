@@ -81,6 +81,13 @@ func main() {
 	metricsCollector.RegisterBlockStreamer(blockStreamer)
 	metricsCollector.RegisterWorkerPoolHealth(workerPool)
 
+	// Wire event callbacks so Prometheus histograms/counters are populated.
+	// Callbacks are injected here (not inside the packages) to avoid import cycles.
+	workerPool.SetOnBlockProcessed(metricsCollector.RecordBlockProcessed)
+	workerPool.SetOnPanic(metricsCollector.RecordWorkerPanic)
+	reorgEngine.SetOnReorg(metricsCollector.RecordReorg)
+	ffiLayer.SetOnApplyBlock(metricsCollector.RecordRustApplyBlock)
+
 	if err := metricsCollector.Start(context.Background(), cfg.MetricsPort); err != nil {
 		logger.Fatal("Failed to start Metrics Collector", zap.Error(err))
 	}
