@@ -126,6 +126,7 @@ All configuration is via environment variables. No config files.
 | `METRICS_PORT` | No | `9090` | Port for Prometheus metrics server |
 | `MCP_PORT` | No | `8080` | Port for MCP JSON-RPC server |
 | `LOAD_TEST_ENABLED` | No | `false` | Enable synthetic load testing mode (no real Ethereum node needed) |
+| `LOG_LEVEL` | No | `info` | Log verbosity: `trace`, `debug`, `info`, `warn`, `error` |
 
 ---
 

@@ -51,8 +51,13 @@ type Collector struct {
 	rustCore    RustCoreStats
 	
 	// Health check providers
-	blockStreamer BlockStreamerHealth
+	blockStreamer    BlockStreamerHealth
 	workerPoolHealth WorkerPoolHealth
+
+	// loadTestMode skips the block-streamer connectivity check in /health and
+	// /readyz. In load-test mode the streamer intentionally does not connect,
+	// so requiring it would cause those probes to always return 503.
+	loadTestMode bool
 	
 	// Collection control
 	stopCh chan struct{}
@@ -384,16 +389,26 @@ func (c *Collector) RegisterWorkerPoolHealth(wp WorkerPoolHealth) {
 	c.workerPoolHealth = wp
 }
 
+// SetLoadTestMode configures the collector to skip block-streamer connectivity
+// checks in /health and /readyz. Call this when LOAD_TEST_ENABLED=true so that
+// those probes return 200 even though the streamer is intentionally disconnected.
+func (c *Collector) SetLoadTestMode(enabled bool) {
+	c.loadTestMode = enabled
+}
+
 // handleHealth handles the /health endpoint (legacy, combines liveness + readiness)
 func (c *Collector) handleHealth(w http.ResponseWriter, r *http.Request) {
-	// Check if Block_Streamer is connected
-	if c.blockStreamer == nil || !c.blockStreamer.IsConnected() {
-		c.logger.Debug("health check failed: block streamer not connected")
-		w.WriteHeader(http.StatusServiceUnavailable)
-		w.Write([]byte("Block streamer not connected\n"))
-		return
+	// In load-test mode the block streamer intentionally does not connect.
+	// Skip the streamer check so /health returns 200 for a healthy load-test run.
+	if !c.loadTestMode {
+		if c.blockStreamer == nil || !c.blockStreamer.IsConnected() {
+			c.logger.Debug("health check failed: block streamer not connected")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			w.Write([]byte("Block streamer not connected\n"))
+			return
+		}
 	}
-	
+
 	// Check if workers are active
 	if c.workerPoolHealth == nil || c.workerPoolHealth.ActiveWorkers() == 0 {
 		c.logger.Debug("health check failed: no active workers")
@@ -401,7 +416,7 @@ func (c *Collector) handleHealth(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("No active workers\n"))
 		return
 	}
-	
+
 	// System is healthy
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("OK\n"))
@@ -431,11 +446,14 @@ func (c *Collector) handleReadyz(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if block streamer is connected (required for readiness)
-	if c.blockStreamer == nil || !c.blockStreamer.IsConnected() {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		w.Write([]byte("Block streamer not connected\n"))
-		return
+	// In load-test mode the streamer is intentionally disconnected — skip the
+	// connectivity check so /readyz returns 200 when workers are running.
+	if !c.loadTestMode {
+		if c.blockStreamer == nil || !c.blockStreamer.IsConnected() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			w.Write([]byte("Block streamer not connected\n"))
+			return
+		}
 	}
 
 	w.WriteHeader(http.StatusOK)

@@ -55,8 +55,6 @@ ETH_RPC_URL="wss://mainnet.infura.io/ws/v3/YOUR-KEY" make run
 ETH_RPC_URL=ws://localhost:8545 LOAD_TEST_ENABLED=true make run
 ```
 
-> In load-test mode use `/livez` for health checks — `/health` returns 503 when the streamer is not connected.
-
 ### Docker
 
 ```bash
@@ -72,6 +70,7 @@ docker compose up
 | `METRICS_PORT` | No | `9090` | Prometheus metrics + health endpoints |
 | `MCP_PORT` | No | `8080` | MCP JSON-RPC introspection server |
 | `LOAD_TEST_ENABLED` | No | `false` | Run without a real Ethereum node |
+| `LOG_LEVEL` | No | `info` | Log verbosity: `trace`, `debug`, `info`, `warn`, `error` |
 
 ## Endpoints
 

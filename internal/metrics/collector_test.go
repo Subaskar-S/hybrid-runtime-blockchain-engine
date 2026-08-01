@@ -246,8 +246,6 @@ func TestCollector_HealthEndpoint_StreamerDisconnected(t *testing.T) {
 func TestCollector_HealthEndpoint_NoActiveWorkers(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
 	collector := NewCollector(logger)
-
-	// Register with no active workers
 	collector.RegisterBlockStreamer(&mockBlockStreamerHealth{connected: true})
 	collector.RegisterWorkerPoolHealth(&mockWorkerPoolHealth{activeWorkers: 0})
 
@@ -405,5 +403,103 @@ func TestCollector_DebugStateEndpoint_NoRustCore(t *testing.T) {
 
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Errorf("expected status 503, got %d", resp.StatusCode)
+	}
+}
+
+// TestCollector_HealthEndpoint_LoadTestMode verifies that /health returns 200
+// when loadTestMode is true even though the block streamer is disconnected (TD-7).
+func TestCollector_HealthEndpoint_LoadTestMode(t *testing.T) {
+	logger, _ := zap.NewDevelopment()
+	collector := NewCollector(logger)
+
+	// Streamer disconnected + load test mode enabled
+	collector.RegisterBlockStreamer(&mockBlockStreamerHealth{connected: false})
+	collector.RegisterWorkerPoolHealth(&mockWorkerPoolHealth{activeWorkers: 4})
+	collector.SetLoadTestMode(true)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	port := 19097
+	if err := collector.Start(ctx, port); err != nil {
+		t.Fatalf("failed to start collector: %v", err)
+	}
+	defer collector.Stop(context.Background())
+
+	time.Sleep(100 * time.Millisecond)
+
+	resp, err := http.Get("http://localhost:19097/health")
+	if err != nil {
+		t.Fatalf("failed to get health: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200 in load-test mode with disconnected streamer, got %d", resp.StatusCode)
+	}
+}
+
+// TestCollector_ReadyzEndpoint_LoadTestMode verifies that /readyz returns 200
+// in load-test mode with workers running but streamer disconnected (TD-7).
+func TestCollector_ReadyzEndpoint_LoadTestMode(t *testing.T) {
+	logger, _ := zap.NewDevelopment()
+	collector := NewCollector(logger)
+
+	collector.RegisterBlockStreamer(&mockBlockStreamerHealth{connected: false})
+	collector.RegisterWorkerPoolHealth(&mockWorkerPoolHealth{activeWorkers: 4})
+	collector.SetLoadTestMode(true)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	port := 19098
+	if err := collector.Start(ctx, port); err != nil {
+		t.Fatalf("failed to start collector: %v", err)
+	}
+	defer collector.Stop(context.Background())
+
+	time.Sleep(100 * time.Millisecond)
+
+	resp, err := http.Get("http://localhost:19098/readyz")
+	if err != nil {
+		t.Fatalf("failed to get readyz: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200 in load-test mode with disconnected streamer, got %d", resp.StatusCode)
+	}
+}
+
+// TestCollector_HealthEndpoint_LoadTestMode_NoWorkers verifies that /health
+// still returns 503 in load-test mode when there are no active workers.
+func TestCollector_HealthEndpoint_LoadTestMode_NoWorkers(t *testing.T) {
+	logger, _ := zap.NewDevelopment()
+	collector := NewCollector(logger)
+
+	collector.RegisterBlockStreamer(&mockBlockStreamerHealth{connected: false})
+	collector.RegisterWorkerPoolHealth(&mockWorkerPoolHealth{activeWorkers: 0})
+	collector.SetLoadTestMode(true)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	port := 19099
+	if err := collector.Start(ctx, port); err != nil {
+		t.Fatalf("failed to start collector: %v", err)
+	}
+	defer collector.Stop(context.Background())
+
+	time.Sleep(100 * time.Millisecond)
+
+	resp, err := http.Get("http://localhost:19099/health")
+	if err != nil {
+		t.Fatalf("failed to get health: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// No workers → still 503 even in load-test mode
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("expected 503 when no workers, got %d", resp.StatusCode)
 	}
 }

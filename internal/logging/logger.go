@@ -1,16 +1,23 @@
 package logging
 
 import (
+	"fmt"
+	"os"
+	"strings"
+
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
 
-// NewLogger creates a new production-ready zap logger
+// NewLogger creates a new production-ready zap logger.
+// The log level is read from the LOG_LEVEL environment variable
+// (trace|debug|info|warn|error). Defaults to info if unset or invalid.
 func NewLogger() (*zap.Logger, error) {
 	config := zap.NewProductionConfig()
-	
-	// Configure log levels
-	config.Level = zap.NewAtomicLevelAt(zapcore.InfoLevel)
+
+	// Configure log level from LOG_LEVEL env var
+	level := levelFromEnv()
+	config.Level = zap.NewAtomicLevelAt(level)
 	
 	// Configure encoder to include timestamp, level, and component name
 	config.EncoderConfig.TimeKey = "timestamp"
@@ -76,4 +83,26 @@ func NewDevelopmentLogger() (*zap.Logger, error) {
 	}
 	
 	return logger, nil
+}
+
+// levelFromEnv reads LOG_LEVEL from the environment and returns the
+// corresponding zapcore.Level. Valid values: trace, debug, info, warn, error.
+// "trace" is mapped to debug (zap has no trace level).
+// Returns zapcore.InfoLevel for unrecognised or empty values.
+func levelFromEnv() zapcore.Level {
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv("LOG_LEVEL")))
+	switch raw {
+	case "trace", "debug":
+		return zapcore.DebugLevel
+	case "info", "":
+		return zapcore.InfoLevel
+	case "warn", "warning":
+		return zapcore.WarnLevel
+	case "error":
+		return zapcore.ErrorLevel
+	default:
+		// Unknown value — log a warning to stderr and fall back to info
+		fmt.Fprintf(os.Stderr, "logging: unknown LOG_LEVEL %q, defaulting to info\n", raw)
+		return zapcore.InfoLevel
+	}
 }
