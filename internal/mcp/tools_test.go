@@ -1177,3 +1177,44 @@ func (m *MockLoadTester) Run(tps int, duration time.Duration) error {
 	}
 	return nil
 }
+
+// TestApplyBlockLatency_CallbackWiring verifies the pattern used in main.go:
+//
+//	ffiLayer.SetOnApplyBlock(func(d time.Duration) {
+//	    metricsCollector.RecordRustApplyBlock(d)
+//	    runtimeTools.GetApplyBlockLatencyTracker().Record(float64(d.Milliseconds()))
+//	})
+//
+// Before TD-4 was fixed, GetApplyBlockLatency always returned empty arrays
+// because nothing called Record on the tracker. This test confirms the
+// callback correctly populates the tracker so the MCP tool returns data.
+func TestApplyBlockLatency_CallbackWiring(t *testing.T) {
+	logger := zap.NewNop()
+	mockReorgEngine := reorg.NewReorgEngine(logger, nil)
+	tools := NewRuntimeTools(mockReorgEngine, nil)
+
+	// Simulate the main.go callback — convert duration to milliseconds and record
+	simulateFFICallback := func(d time.Duration) {
+		tools.GetApplyBlockLatencyTracker().Record(float64(d.Milliseconds()))
+	}
+
+	// Fire callback with three durations: 2ms, 4ms, 6ms
+	simulateFFICallback(2 * time.Millisecond)
+	simulateFFICallback(4 * time.Millisecond)
+	simulateFFICallback(6 * time.Millisecond)
+
+	// get_apply_block_latency must now return populated data
+	result, err := tools.GetApplyBlockLatency(nil)
+	require.NoError(t, err)
+
+	resultMap, ok := result.(map[string]interface{})
+	require.True(t, ok)
+
+	latencies, ok := resultMap["latencies_ms"].([]float64)
+	require.True(t, ok)
+	assert.Equal(t, 3, len(latencies), "tracker must have 3 entries after 3 callback fires")
+
+	mean, ok := resultMap["mean_ms"].(float64)
+	require.True(t, ok)
+	assert.InDelta(t, 4.0, mean, 0.01, "mean of [2,4,6] ms must be 4.0")
+}
