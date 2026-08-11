@@ -23,7 +23,6 @@ type Config struct {
 	// LOAD_TEST_ENABLED enables load testing mode (default: false)
 	LoadTestEnabled bool
 }
-
 // Load reads configuration from environment variables
 func Load() (*Config, error) {
 	cfg := &Config{}

@@ -273,3 +273,51 @@ func parseJSONLog(jsonStr string) (map[string]interface{}, error) {
 	err := json.Unmarshal([]byte(jsonStr), &result)
 	return result, err
 }
+
+// TestLevelFromEnv verifies LOG_LEVEL env var parsing (TD-9).
+func TestLevelFromEnv(t *testing.T) {
+	tests := []struct {
+		name     string
+		envValue string
+		want     zapcore.Level
+	}{
+		{"empty → info", "", zapcore.InfoLevel},
+		{"info", "info", zapcore.InfoLevel},
+		{"INFO uppercase", "INFO", zapcore.InfoLevel},
+		{"debug", "debug", zapcore.DebugLevel},
+		{"trace maps to debug", "trace", zapcore.DebugLevel},
+		{"TRACE uppercase", "TRACE", zapcore.DebugLevel},
+		{"warn", "warn", zapcore.WarnLevel},
+		{"warning", "warning", zapcore.WarnLevel},
+		{"error", "error", zapcore.ErrorLevel},
+		{"ERROR uppercase", "ERROR", zapcore.ErrorLevel},
+		{"unknown → info", "verbose", zapcore.InfoLevel},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.envValue == "" {
+				t.Setenv("LOG_LEVEL", "")
+			} else {
+				t.Setenv("LOG_LEVEL", tt.envValue)
+			}
+			got := levelFromEnv()
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// TestNewLogger_RespectsLogLevel verifies that NewLogger picks up LOG_LEVEL.
+func TestNewLogger_RespectsLogLevel(t *testing.T) {
+	t.Setenv("LOG_LEVEL", "debug")
+
+	logger, err := NewLogger()
+	require.NoError(t, err)
+	require.NotNil(t, logger)
+
+	// Debug level must be enabled
+	assert.True(t, logger.Core().Enabled(zapcore.DebugLevel),
+		"logger should have debug level enabled when LOG_LEVEL=debug")
+
+	logger.Sync()
+}

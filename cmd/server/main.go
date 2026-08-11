@@ -80,6 +80,9 @@ func main() {
 	metricsCollector.RegisterReorgEngine(metrics.NewReorgEngineAdapter(reorgEngine))
 	metricsCollector.RegisterBlockStreamer(blockStreamer)
 	metricsCollector.RegisterWorkerPoolHealth(workerPool)
+	if cfg.LoadTestEnabled {
+		metricsCollector.SetLoadTestMode(true)
+	}
 
 	// Wire event callbacks so Prometheus histograms/counters are populated.
 	// Callbacks are injected here (not inside the packages) to avoid import cycles.
